@@ -11,16 +11,6 @@ class CEM:
     def __init__(self,data):
         pass
 
-class print_output:
-
-    def __init__(self,r):
-        self.out = r
-    def dump(self):
-        print('%8s\t%10s\t%10s\t%10s\t%10s\t%10s\t%10s\t%10s\t' % ('Timestep','KE','Temp','Press','evdw','ebond','eangle','edihedral'))
-        for i in range(0,len(self.out)):
-            print('%8d\t%10f\t%10f\t%10f\t%10f\t%10f\t%10f\t%10f\t' % (self.out[i][0],self.out[i][1],self.out[i][2],self.out[i][3],self.out[i][4],self.out[i][5],self.out[i][6],self.out[i][7]))
-
-
 if __name__ == '__main__':
     psf = mda.Universe("./FA_data/pe_l.psf","./FA_data/1nptts1.dcd")
     data_all = Iteractive_boltzmann_inversion(psf)
@@ -40,8 +30,9 @@ if __name__ == '__main__':
     start = time.time()
     initial_state = copy.deepcopy(initial_parameter[0])
     sim = MD_simulation(initial_state,initial_parameter[1],initial_parameter[2],initial_parameter[3],initial_parameter[4],28,310,1)
+    sim.InitVelDis()
     output = sim.run()
-    print_output(output).dump()
+    #print_output(output).dump()
     end = time.time()
     print("Cost: "+str(end - start)) 
     print("Done")
