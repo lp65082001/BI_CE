@@ -27,12 +27,8 @@ if __name__ == '__main__':
     #initial_state = copy.deepcopy(initial_parameter[0])
 
     print("MD run")
-    start = time.time()
     initial_state = copy.deepcopy(initial_parameter[0])
     sim = MD_simulation(initial_state,initial_parameter[1],initial_parameter[2],initial_parameter[3],initial_parameter[4],28,310,1)
     sim.InitVelDis()
     output = sim.run()
-    #print_output(output).dump()
-    end = time.time()
-    print("Cost: "+str(end - start)) 
-    print("Done")
+
