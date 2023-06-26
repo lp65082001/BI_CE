@@ -1,7 +1,7 @@
 import numpy as np
 import math
 from scipy.spatial import distance_matrix
-#from numba import jit
+from numba import jit
 #import jax.numpy as jnp
 import warnings
 import time
