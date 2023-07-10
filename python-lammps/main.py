@@ -1,6 +1,5 @@
 import multiprocessing as mp 
 import time
-from unittest.main import MAIN_EXAMPLES
 from lammps import lammps
 import numpy as np
 import os
@@ -384,7 +383,7 @@ if __name__ == '__main__':
 
     # Parameter setting #
     epech = 250
-    cov = 1
+    cov = 0
 
     # Parameter #
     initial_dis = [2.5046,0.12784,149.3868,35.2312]
