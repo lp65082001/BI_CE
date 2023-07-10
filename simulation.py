@@ -8,10 +8,10 @@ from openmm.app import PDBFile, ForceField
 from openmm import HarmonicBondForce,HarmonicAngleForce,NonbondedForce
 from openmm.unit import picoseconds, kelvin,picosecond
 from openmm.openmm import Context, Platform
-import torch
-
+import subprocess
 import numpy as np
 import math
+import time
 
 from sys import stdout
 import warnings
@@ -68,8 +68,13 @@ def add_nonbond_table(eps,sig,bl,al,ss,rs):
 
 # CG simulation #
 def sample_simulation(par,sys,temp = 300, timestep=0.004):
-    df_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    platform = Platform.getPlatformByName('CUDA')
+    try:
+        subprocess.check_output('nvidia-smi')
+        df_device = 'CUDA'
+    except Exception: 
+        df_device = 'CPU'
+    print(f"Device: {df_device}")
+    platform = Platform.getPlatformByName(df_device)
 
     pressure_list = []
     volume = sys[3][0]*sys[3][1]*sys[3][2]*1000
@@ -103,10 +108,10 @@ def sample_simulation(par,sys,temp = 300, timestep=0.004):
     #simulation.reporters.append(StateDataReporter(stdout, 1000, step=True,
     #        potentialEnergy=True, temperature=True,volume=True))
     for i in range(100):
-        print(i)
         pressure_list.append(cal_press(simulation.context.getState(getPositions=True,getVelocities=True, getForces=True),sys[0],volume))
         simulation.step(500)
-    return np.mean(np.array(pressure_list)[-50:100])
+
+    return np.mean(np.array(pressure_list)[-20:100])
 
 
 
