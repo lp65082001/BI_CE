@@ -1,7 +1,6 @@
 import MDAnalysis as mda
 from MDAnalysis.analysis.rdf import InterRDF
 from MDAnalysis import transformations
-from matplotlib import pyplot as plt
 import numpy as np
 import gc
 import math 
@@ -12,10 +11,7 @@ from collections import OrderedDict
 import time
 import warnings
 import copy
-
 warnings.filterwarnings("ignore")
-plt.style.use('dark_background')
-
 
 class Iteractive_boltzmann_inversion:
     
@@ -86,12 +82,10 @@ class Iteractive_boltzmann_inversion:
             point_1 = x[i+0]
             point_2 = x[i+1]
             point_3 = x[i+2]
-            a=math.sqrt((point_2[0]-point_3[0])*(point_2[0]-point_3[0])+(point_2[1]-point_3[1])*(point_2[1] - point_3[1]))
-            b=math.sqrt((point_1[0]-point_3[0])*(point_1[0]-point_3[0])+(point_1[1]-point_3[1])*(point_1[1] - point_3[1]))
-            c=math.sqrt((point_1[0]-point_2[0])*(point_1[0]-point_2[0])+(point_1[1]-point_2[1])*(point_1[1]-point_2[1]))
-
+            a = np.linalg.norm(point_2-point_3)
+            b = np.linalg.norm(point_1-point_3)
+            c = np.linalg.norm(point_1-point_2)
             y.append(math.degrees(math.acos((b*b-a*a-c*c)/(-2*a*c))))
-
         return y  
     
     def cal_distribution(self):
