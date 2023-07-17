@@ -15,7 +15,7 @@ read_data	0.data
 #minimize 0.0 1.0e-8 1000 100000
 
 # time integration settings
-timestep		4	# 1fs
+timestep		20	# 1fs
 #thermo 2500
 #thermosystem set
 velocity 		all create 300.0 4928459 dist gaussian

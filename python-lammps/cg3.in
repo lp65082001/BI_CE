@@ -13,7 +13,7 @@ read_data	3.data
 
 
 # time integration settings
-timestep		4	# 1fs
+timestep		20	# 1fs
 #thermo 2500
 
 #thermosystem set

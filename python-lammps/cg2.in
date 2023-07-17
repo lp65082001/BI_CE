@@ -11,7 +11,7 @@ pair_style lj/cut 20
 read_data	2.data
 
 # time integration settings
-timestep		4	# 1fs
+timestep		20	# 1fs
 #thermo 2500
 #thermosystem set
 velocity 		all create 300.0 4928459 dist gaussian
