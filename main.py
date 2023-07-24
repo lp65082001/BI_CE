@@ -5,6 +5,7 @@ from pdb_make import output_cg
 from xml_make import output_xml
 from simulation import sample_simulation
 from CEM import CEM
+from cg_struct import cg_inform
 
 
 
@@ -25,8 +26,12 @@ if __name__ == '__main__':
     output_xml(initial_par[1])
 
     #sample_simulation(initial_par[0],initial_par[1],temp=300,timestep=0.02)
-    optimizer = CEM(initial_par[0],initial_par[1],ref_structure,pressure=1,temperature=300)
-    optimizer.CEM_optimizer_run()
+    #optimizer = CEM(initial_par[0],initial_par[1],ref_structure,pressure=1,temperature=300)
+    #optimizer.CEM_optimizer_run()
+
+    cg_psf = mda.Universe("./result/cg_pe.data","./result/PE_bead_npt.dcd")
+    cg_modulus = cg_inform(cg_psf,ref_structure)
+
 
 
 
