@@ -1154,11 +1154,7 @@ class NVT_ensemble:
             force_next = self.CalculateForces()/ 48.88821291 /48.88821291
             self.IncrementalVel((0.5*dt*force+0.5*dt*force_next)/self.mass)
 
-    
-
-        
-
-        
+   
    
 if __name__ == '__main__':
     psf = mda.Universe("../pe_l.psf","../1nptts1.dcd")
