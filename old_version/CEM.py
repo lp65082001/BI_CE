@@ -189,7 +189,7 @@ class CEM:
     def convergence_a(self,x1,x2,threshold):
         newlist = x2[x1]
         if np.mean(newlist<=threshold):
-            retursn -1
+            return -1
         else: 
             return 1
 
