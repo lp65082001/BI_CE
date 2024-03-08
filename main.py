@@ -1,7 +1,7 @@
 """ Create by Amborse hui from M^5 lab """
 
 from mapping import FA2CG 
-from MD import MD_universe
+from MD import MD_Universe
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -14,9 +14,9 @@ def process():
     data_all.cal_distribution()
     #data_all.xyz2data()
 
-    initial_parameter = data_all.get_parameter()
+    initial_setting, initial_potential = data_all.get_parameter()
 
-    sim = MD_universe(initial_parameter,28,temperature=300,pressure=1)
+    sim = MD_Universe(initial_setting, initial_potential,28,temperature=300,pressure=1)
     sim.run()
    
 if __name__ == '__main__':

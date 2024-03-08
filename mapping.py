@@ -331,7 +331,7 @@ class FA2CG:
         # potential list #
         potential = np.array([self.bondi,self.bondk,self.anglei,self.anglek[0],self.sigma_,self.epsilon_])
 
-        return [np.array(position).reshape((-1,3)),np.array(bond_l).reshape((-1,3)),np.array(angle_l).reshape((-1,4)),volume,potential]
+        return [np.array(position).reshape((-1,3)),np.array(bond_l).reshape((-1,3)),np.array(angle_l).reshape((-1,4)),volume],potential
 
     # get all time position #
     def get_pos(self):
