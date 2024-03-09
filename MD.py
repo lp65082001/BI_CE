@@ -49,13 +49,13 @@ class MD_Universe:
         distance_table = distance_matrix(self.self.system[:,0:3],self.system[:,0:3])
         # consider to PBC #
         distance_table_pbc = self.calculate_pbc_subtract(distance_table) 
-        # ignore 1-2, 1-3
+        # ignore 1-2, 1-3 #
         atom_list[np.ix_(self.bond_table[:,1],self.bond_table[:,2])] = 0
         atom_list[np.ix_(self.angle_table[:,1],self.angle_table[:,3])] = 0
         close_dist_table = np.where(distance_table_pbc>cutoff)
         atom_list[np.ix_(close_dist_table[0],close_dist_table[1])] = 0
         self.lj_cal = np.where(np.triu(atom_list,1)==1)
-        self.distance_table_pbc = distance_table_pbc
+        #self.distance_table_pbc = distance_table_pbc
 
     # calculate pair-distance and subtract a, b, c (need improve and check)#
     def calculate_pbc_subtract(self,distance_table):
@@ -106,32 +106,48 @@ class MD_Universe:
     def CalculateForces(self):
         forces = np.zeros((self.system.shape[0],3))
         '''
-        ## nonbond term ##
+        ## nonbond term (origin)##
         for i in range(self.lj_cal[0].shape[0]):
             rij = self.system[self.lj_cal[1][i],0:3] - self.system[self.lj_cal[0][i],0:3]
             rij = rij - round(np.dot(rij,self.a)/self.a_len**2)*self.a - round(np.dot(rij,self.b)/self.b_len**2)*self.b - round(np.dot(rij,self.c)/self.c_len**2)*self.c
             sr6 = pow(self.sigma**2/np.dot(rij,rij),3)
             sr12 = sr6**2
-            rij_len = np.power(np.dot(rij,rij),2)
+            rij_len = np.power(np.dot(rij,rij),0.5)
             if rij_len < cutoff:
                 fij = 4*self.epsilon/rij_len*(-12*sr12+6*sr6)
                 forces[self.lj_cal[0][i],:] += fij*rij/rij_len
                 forces[self.lj_cal[1][i],:] -= fij*rij/rij_len
         '''
-        ## nonbond term (check correct)##
+        ## nonbond term (matrix)##
         rij = self.system[self.lj_cal[1],0:3] - self.system[self.lj_cal[0],0:3]
-        sr6 = np.power(self.sigma**2/np.dot(rij,rij),3)
+        rij = rij - np.round(np.dot(rij,self.a)/self.a_len**2)*self.a - \
+        - np.round(np.dot(rij,self.b)/self.b_len**2)*self.b \
+        - np.round(np.dot(rij,self.c)/self.c_len**2)*self.c
+        sr6 = np.power(self.sigma**2/np.linalg.norm(rij,axis=1),3)
         sr12 = np.power(sr6,2)
-
-
-        #forces[np.ix_(self.lj_cal[0],self.lj_cal[1])]
-
-        ## bond term ##
+        rij_len = np.linalg.norm(rij,axis=1)
+        fij = 4*self.epsilon/rij_len*(-12*sr12+6*sr6)
+        forces[self.lj_cal[0],:] += fij*rij/rij_len
+        forces[self.lj_cal[1],:] -= fij*rij/rij_len
+        '''
+        ## bond term (origin)##
         for i in range(0,self.bond_table.shape[0]):
             pair = self.bond_table[i]
             fbond = -2*self.bond_energy*((np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))-self.bond_init)
             forces[pair[1]-1,:] += ((self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])/np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))*fbond
             forces[pair[2]-1,:] -= ((self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])/np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))*fbond
+        '''
+        ## bond term (matrix)##
+        bond_rij = self.system[self.bond_table[1],0:3] - self.system[self.bond_table[2],0:3]
+        bond_rij = bond_rij - np.round(np.dot(rij,self.a)/self.a_len**2)*self.a - \
+        - np.round(np.dot(rij,self.b)/self.b_len**2)*self.b \
+        - np.round(np.dot(rij,self.c)/self.c_len**2)*self.c
+        bond_rij_len = np.linalg.norm(bond_rij,axis=1)
+        fbond = -2*self.bond_energy*(bond_rij_len-self.bond_init)
+        forces[self.bond_table[1]-1,:] += ((self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])/np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))*fbond
+        forces[self.bond_table[2]-1,:] -= ((self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])/np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))*fbond
+
+
 
         ## angle term ##
 
