@@ -144,6 +144,7 @@ class MD_Universe:
         - np.round(np.dot(rij,self.c)/self.c_len**2)*self.c
         bond_rij_len = np.linalg.norm(bond_rij,axis=1)
         fbond = -2*self.bond_energy*(bond_rij_len-self.bond_init)
+        # modify
         forces[self.bond_table[1]-1,:] += ((self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])/np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))*fbond
         forces[self.bond_table[2]-1,:] -= ((self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])/np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))*fbond
 
