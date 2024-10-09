@@ -46,7 +46,7 @@ class MD_Universe:
     # ignore 1-2, 1-3 neighbor (need improve and check)#
     def non_bonded_neighbor_list(self):
         atom_list = np.ones((self.system.shape[0],self.system.shape[0]))
-        distance_table = distance_matrix(self.self.system[:,0:3],self.system[:,0:3])
+        distance_table = distance_matrix(self.system[:,0:3],self.system[:,0:3])
         # consider to PBC #
         distance_table_pbc = self.calculate_pbc_subtract(distance_table) 
         # ignore 1-2, 1-3 #
@@ -55,6 +55,7 @@ class MD_Universe:
         close_dist_table = np.where(distance_table_pbc>cutoff)
         atom_list[np.ix_(close_dist_table[0],close_dist_table[1])] = 0
         self.lj_cal = np.where(np.triu(atom_list,1)==1)
+        print(self.lj_cal)
         #self.distance_table_pbc = distance_table_pbc
 
     # calculate pair-distance and subtract a, b, c (need improve and check)#
@@ -285,11 +286,11 @@ class MD_Universe:
         print("Status: Running (MD)")
         print('%10s\t%10s\t%10s\t%10s\t%10s\t%10s\t%10s' % ('Timestep','KE','Temp','Press','evdw','ebond','eangle'))
         for i in range(nrun+1):  
+            self.non_bonded_neighbor_list()
             print('%10d\t%10f\t%10f\t%10f\t%10f\t%10f\t%10f' % (i,self.KineticEnergy(),self.GetTemp(),self.CalPress(),self.CalculateEnergy(),self.CalculateBondEnergy(),self.CalculateAngleEnergy()))
-            self.neighbor_list()
             force = self.CalculateForces()/ 48.88821291 /48.88821291
             self.IncrementalPos(dt*self.system[:,3:6]+(0.5*(dt*dt)*force)/self.mass)
-            self.neighbor_list()
+            self.non_bonded_neighbor_list()
             force_next = self.CalculateForces()/ 48.88821291 /48.88821291
             self.IncrementalVel((0.5*dt*force+0.5*dt*force_next)/self.mass)
   
