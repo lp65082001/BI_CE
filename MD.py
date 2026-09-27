@@ -1,296 +1,259 @@
-""" Create by Amborse hui from M^5 lab """
-'''
-to do list
-1. all numpy
-2. calculate force not use for loop
-'''
-from scipy.spatial import distance_matrix
+"""
+OpenMM-based Molecular Dynamics Engine for BI_CE Coarse-Grained Polymer Model.
+Supports multi-process execution on a single GPU (CUDA/OpenCL) or parallel execution on CPU.
+"""
+import openmm
+from openmm import unit
 import numpy as np
 import math
-import time
 
-# Molecule dynamics setting (setting from LAMMPS)#
-gamma = 3
-k = 0.0019872067
-cutoff = 20
-dt = 4 # might be control
-nrun = 1
+def get_openmm_platform(gpu_id=0, requested_platform=None):
+    """
+    Select OpenMM platform and properties.
+    If GPU (CUDA/OpenCL) is available, targets the specified gpu_id to allow
+    multiple subprocesses to share the same GPU.
+    If no GPU is available, falls back to CPU platform (with CpuThreads=1 per worker).
+    """
+    if requested_platform is not None:
+        try:
+            plat = openmm.Platform.getPlatformByName(requested_platform)
+            props = {'DeviceIndex': str(gpu_id)} if requested_platform in ['CUDA', 'OpenCL'] else {}
+            return plat, props
+        except Exception:
+            pass
 
-class MD_Universe: 
-    def __init__(self,initial_setting,initial_parameter,mass,temperature=None,pressure=None):
-        print("Status: Parameter loading")
-        # setting parameter #
-        self.mass = mass
-        self.mass_rs = math.sqrt(mass)
-        self.a = np.array([initial_setting[3][0],0,0])
-        self.b = np.array([0,initial_setting[3][1],0])
-        self.c = np.array([0,0,initial_setting[3][2]])
-        self.a_len = np.linalg.norm(np.array([initial_setting[3][0],0,0]))
-        self.b_len = np.linalg.norm(np.array([0,initial_setting[3][1],0]))
-        self.c_len = np.linalg.norm(np.array([0,0,initial_setting[3][2]]))
-        self.volume = np.prod(initial_setting[3])
-        self.bond_init = initial_parameter[0]
-        self.bond_energy = initial_parameter[1]
-        self.angle_init = initial_parameter[2]
-        self.angle_energy = initial_parameter[3]
-        self.sigma = initial_parameter[4]
-        self.epsilon = initial_parameter[5]
-        self.temp = temperature
-        self.press = pressure
-        self.bond_table = initial_setting[1]
-        self.angle_table = initial_setting[2]
+    for plat_name in ['CUDA', 'OpenCL']:
+        try:
+            plat = openmm.Platform.getPlatformByName(plat_name)
+            props = {'DeviceIndex': str(gpu_id)}
+            # Verify context creation on device
+            test_sys = openmm.System()
+            test_sys.addParticle(1.0 * unit.amu)
+            test_ctx = openmm.Context(test_sys, openmm.VerletIntegrator(1.0 * unit.femtosecond), plat, props)
+            del test_ctx
+            return plat, props
+        except Exception:
+            continue
+
+    # Fallback to CPU platform
+    try:
+        plat = openmm.Platform.getPlatformByName('CPU')
+        # In multi-process runs, 1 thread per worker prevents thread oversubscription
+        return plat, {'CpuThreads': '1'}
+    except Exception:
+        plat = openmm.Platform.getPlatformByName('Reference')
+        return plat, {}
+
+
+class MD_Universe:
+    """
+    OpenMM Molecular Dynamics Simulation Universe for Coarse-Grained Polymer Model.
+    """
+    def __init__(self, initial_setting, initial_parameter, mass=28, temperature=300, pressure=1,
+                 gpu_id=0, platform_name=None, dt=4.0, cutoff=20.0):
+        self.mass = float(mass)
+        self.temp = float(temperature) if temperature is not None else 300.0
+        self.press = float(pressure) if pressure is not None else 1.0
+        self.dt = float(dt)
+        self.cutoff = float(cutoff)
+        self.gpu_id = gpu_id
+        self.platform_name = platform_name
+
+        # Parse settings: [positions, bond_table, angle_table, box]
+        self.box = np.array(initial_setting[3], dtype=float)
+        self.bond_table = np.array(initial_setting[1], dtype=int)
+        self.angle_table = np.array(initial_setting[2], dtype=int)
+        init_coords = np.array(initial_setting[0], dtype=float)
+
+        self.n_atoms = init_coords.shape[0]
+        self.volume_nm3 = np.prod(self.box * 0.1)
+
+        # Parse parameters: [bond_init, bond_energy, angle_init, angle_energy, sigma, epsilon]
+        self.bond_init = float(initial_parameter[0])
+        self.bond_energy = float(initial_parameter[1])
+        self.angle_init = float(initial_parameter[2])
+        self.angle_energy = float(initial_parameter[3])
+        self.sigma = float(initial_parameter[4])
+        self.epsilon = float(initial_parameter[5])
+
         self.bond_dis = []
         self.angle_dis = []
-        self.system = np.hstack((initial_setting[0],np.zeros([initial_setting[0].shape[0],3])))
 
-    # ignore 1-2, 1-3 neighbor (need improve and check)#
-    def non_bonded_neighbor_list(self):
-        atom_list = np.ones((self.system.shape[0],self.system.shape[0]))
-        distance_table = distance_matrix(self.system[:,0:3],self.system[:,0:3])
-        # consider to PBC #
-        distance_table_pbc = self.calculate_pbc_subtract(distance_table) 
-        # ignore 1-2, 1-3 #
-        atom_list[np.ix_(self.bond_table[:,1],self.bond_table[:,2])] = 0
-        atom_list[np.ix_(self.angle_table[:,1],self.angle_table[:,3])] = 0
-        close_dist_table = np.where(distance_table_pbc>cutoff)
-        atom_list[np.ix_(close_dist_table[0],close_dist_table[1])] = 0
-        self.lj_cal = np.where(np.triu(atom_list,1)==1)
-        print(self.lj_cal)
-        #self.distance_table_pbc = distance_table_pbc
+        # System coordinates and velocities [x, y, z, vx, vy, vz] in Angstrom and Angstrom/ps
+        self.system = np.hstack((init_coords, np.zeros((self.n_atoms, 3))))
 
-    # calculate pair-distance and subtract a, b, c (need improve and check)#
-    def calculate_pbc_subtract(self,distance_table):
-        a_ = np.round(np.dot(self.system[:,0],self.a)/self.a_len**2)*self.a
-        b_ = np.round(np.dot(self.system[:,1],self.b)/self.b_len**2)*self.b
-        c_ = np.round(np.dot(self.system[:,2],self.c)/self.c_len**2)*self.c
+        # Build OpenMM System
+        self._build_openmm_system(init_coords)
 
-        return distance_table - np.dot(a_,a_.T) - np.dot(b_,b_.T) - np.dot(c_,c_.T)
+    def _build_openmm_system(self, init_coords):
+        self.omm_system = openmm.System()
 
-    # set initial velocity #
+        # Set periodic box vectors (converted from Angstrom to nm)
+        box_vec_a = [self.box[0], 0.0, 0.0] * unit.angstrom
+        box_vec_b = [0.0, self.box[1], 0.0] * unit.angstrom
+        box_vec_c = [0.0, 0.0, self.box[2]] * unit.angstrom
+        self.omm_system.setDefaultPeriodicBoxVectors(box_vec_a, box_vec_b, box_vec_c)
+
+        # Add particles
+        for _ in range(self.n_atoms):
+            self.omm_system.addParticle(self.mass * unit.amu)
+
+        # 1. Harmonic Bond Force (Force Group 0)
+        # Note: OpenMM E = 0.5 * k * (r - r0)^2, while repo E = K_b * (r - r0)^2 -> k_omm = 2 * K_b
+        self.bond_force = openmm.HarmonicBondForce()
+        self.bond_force.setForceGroup(0)
+        k_bond_omm = 2.0 * self.bond_energy * unit.kilocalories_per_mole / (unit.angstrom ** 2)
+        r0 = self.bond_init * unit.angstrom
+        if self.bond_table.shape[0] > 0:
+            for b in self.bond_table:
+                self.bond_force.addBond(int(b[1] - 1), int(b[2] - 1), r0, k_bond_omm)
+        self.omm_system.addForce(self.bond_force)
+
+        # 2. Harmonic Angle Force (Force Group 1)
+        # Note: OpenMM E = 0.5 * k * (theta - theta0)^2 -> k_omm = 2 * K_a
+        self.angle_force = openmm.HarmonicAngleForce()
+        self.angle_force.setForceGroup(1)
+        k_angle_omm = 2.0 * self.angle_energy * unit.kilocalories_per_mole / (unit.radian ** 2)
+        theta0 = self.angle_init * unit.degrees
+        if self.angle_table.shape[0] > 0:
+            for a in self.angle_table:
+                self.angle_force.addAngle(int(a[1] - 1), int(a[2] - 1), int(a[3] - 1), theta0, k_angle_omm)
+        self.omm_system.addForce(self.angle_force)
+
+        # 3. Nonbonded Lennard-Jones Force (Force Group 2)
+        self.nb_force = openmm.NonbondedForce()
+        self.nb_force.setForceGroup(2)
+        self.nb_force.setNonbondedMethod(openmm.NonbondedForce.CutoffPeriodic)
+        actual_cutoff = min(self.cutoff, 0.49 * float(np.min(self.box))) * unit.angstrom
+        self.nb_force.setCutoffDistance(actual_cutoff)
+
+        sigma_val = self.sigma * unit.angstrom
+        eps_val = self.epsilon * unit.kilocalories_per_mole
+        for _ in range(self.n_atoms):
+            self.nb_force.addParticle(0.0 * unit.elementary_charge, sigma_val, eps_val)
+
+        # Exclude 1-2 and 1-3 pairs from nonbonded interactions
+        if self.bond_table.shape[0] > 0:
+            for b in self.bond_table:
+                self.nb_force.addException(int(b[1] - 1), int(b[2] - 1),
+                                          0.0 * unit.elementary_charge**2, 1.0 * unit.angstrom, 0.0 * unit.kilocalories_per_mole)
+        if self.angle_table.shape[0] > 0:
+            for a in self.angle_table:
+                self.nb_force.addException(int(a[1] - 1), int(a[3] - 1),
+                                          0.0 * unit.elementary_charge**2, 1.0 * unit.angstrom, 0.0 * unit.kilocalories_per_mole)
+        self.omm_system.addForce(self.nb_force)
+
+        # Integrator: LangevinMiddleIntegrator maintains NVT accurately
+        self.integrator = openmm.LangevinMiddleIntegrator(
+            self.temp * unit.kelvin,
+            1.0 / unit.picosecond,
+            self.dt * unit.femtosecond
+        )
+
+        # Select platform and initialize context
+        self.platform, self.properties = get_openmm_platform(self.gpu_id, self.platform_name)
+        self.context = openmm.Context(self.omm_system, self.integrator, self.platform, self.properties)
+
+        # Set initial positions
+        self.context.setPositions(init_coords * unit.angstrom)
+        self.InitVelDis()
+
     def InitVelDis(self):
-        self.system[:,3] = np.random.randn(self.system.shape[0])
-        self.system[:,4] = np.random.randn(self.system.shape[0])
-        self.system[:,5] = np.random.randn(self.system.shape[0])
-        
-        self.system[:,3] -= np.sum(self.system[:,3])/self.system.shape[0]/self.mass_rs
-        self.system[:,4] -= np.sum(self.system[:,4])/self.system.shape[0]/self.mass_rs
-        self.system[:,5] -= np.sum(self.system[:,5])/self.system.shape[0]/self.mass_rs
-        
-        scale = np.power(self.temp/self.GetTemp(),0.5)
-        self.system[:,3:6] = np.multiply(self.system[:,3:6],scale)
+        """Initialize Maxwell-Boltzmann velocities to target temperature."""
+        self.context.setVelocitiesToTemperature(self.temp * unit.kelvin)
+        self._update_system_state()
 
-    # NVT Ensemble (temp_rescale) #
-    def SetTemp(self):
-        t_s = self.GetTemp() - self.temp
-        if (abs(t_s) > 0.02):
-            t_t = self.GetTemp() - 0.5*t_s
-            scale = np.power(t_t/self.GetTemp(),0.5)
-            self.system[:,3:6] = self.system[:,3:6]*scale
+    def pbc_displacement(self, dr):
+        """Minimum image convention displacement for orthorhombic box."""
+        return dr - self.box * np.round(dr / self.box)
 
-    # get temperature #
+    def _update_system_state(self):
+        """Sync positions and velocities from OpenMM Context to self.system."""
+        state = self.context.getState(getPositions=True, getVelocities=True)
+        pos = state.getPositions(asNumpy=True).value_in_unit(unit.angstrom)
+        vel = state.getVelocities(asNumpy=True).value_in_unit(unit.angstrom / unit.picosecond)
+        self.system[:, 0:3] = pos
+        self.system[:, 3:6] = vel
+
+        # Update bond lengths under PBC
+        if self.bond_table.shape[0] > 0:
+            idx1 = self.bond_table[:, 1] - 1
+            idx2 = self.bond_table[:, 2] - 1
+            dr = self.pbc_displacement(pos[idx2] - pos[idx1])
+            self.bond_dis = np.linalg.norm(dr, axis=1).tolist()
+
+        # Update angles under PBC
+        if self.angle_table.shape[0] > 0:
+            idx1 = self.angle_table[:, 1] - 1
+            idx2 = self.angle_table[:, 2] - 1
+            idx3 = self.angle_table[:, 3] - 1
+            r1 = self.pbc_displacement(pos[idx1] - pos[idx2])
+            r2 = self.pbc_displacement(pos[idx3] - pos[idx2])
+            norm1 = np.linalg.norm(r1, axis=1)
+            norm2 = np.linalg.norm(r2, axis=1)
+            valid = (norm1 > 1e-6) & (norm2 > 1e-6)
+            cos_a = np.sum(r1[valid] * r2[valid], axis=1) / (norm1[valid] * norm2[valid])
+            cos_a = np.clip(cos_a, -1.0, 1.0)
+            self.angle_dis = np.degrees(np.arccos(cos_a)).tolist()
+
     def GetTemp(self):
-        return (self.mass*np.sum(np.power(self.system[:,3:6],2))*0.239005736*10000)/(gamma*(self.system.shape[0]-1)*k)
+        state = self.context.getState(getEnergy=True)
+        ke_kJ_mol = state.getKineticEnergy().value_in_unit(unit.kilojoules_per_mole)
+        k_B = 0.008314462618 # kJ/(mol*K)
+        dof = max(1, 3 * self.n_atoms - 3)
+        return float((2.0 * ke_kJ_mol) / (dof * k_B))
 
-    # update position #
-    def IncrementalPos(self,increments):
-        self.system[:,0:3] = self.system[:,0:3] + increments
-
-    # updata velocity #
-    def IncrementalVel(self,increments):
-        self.system[:,3:6] = self.system[:,3:6] + increments
-
-    # calculate KE #
     def KineticEnergy(self):
-        return 0.5*self.mass*np.sum(np.power(self.system[:,3:6],2))*0.239005736*10000
+        state = self.context.getState(getEnergy=True)
+        return float(state.getKineticEnergy().value_in_unit(unit.kilocalories_per_mole))
 
-    # calcaule potential force #
-    def CalculateForces(self):
-        forces = np.zeros((self.system.shape[0],3))
-        '''
-        ## nonbond term (origin)##
-        for i in range(self.lj_cal[0].shape[0]):
-            rij = self.system[self.lj_cal[1][i],0:3] - self.system[self.lj_cal[0][i],0:3]
-            rij = rij - round(np.dot(rij,self.a)/self.a_len**2)*self.a - round(np.dot(rij,self.b)/self.b_len**2)*self.b - round(np.dot(rij,self.c)/self.c_len**2)*self.c
-            sr6 = pow(self.sigma**2/np.dot(rij,rij),3)
-            sr12 = sr6**2
-            rij_len = np.power(np.dot(rij,rij),0.5)
-            if rij_len < cutoff:
-                fij = 4*self.epsilon/rij_len*(-12*sr12+6*sr6)
-                forces[self.lj_cal[0][i],:] += fij*rij/rij_len
-                forces[self.lj_cal[1][i],:] -= fij*rij/rij_len
-        '''
-        ## nonbond term (matrix)##
-        rij = self.system[self.lj_cal[1],0:3] - self.system[self.lj_cal[0],0:3]
-        rij = rij - np.round(np.dot(rij,self.a)/self.a_len**2)*self.a - \
-        - np.round(np.dot(rij,self.b)/self.b_len**2)*self.b \
-        - np.round(np.dot(rij,self.c)/self.c_len**2)*self.c
-        sr6 = np.power(self.sigma**2/np.linalg.norm(rij,axis=1),3)
-        sr12 = np.power(sr6,2)
-        rij_len = np.linalg.norm(rij,axis=1)
-        fij = 4*self.epsilon/rij_len*(-12*sr12+6*sr6)
-        forces[self.lj_cal[0],:] += fij*rij/rij_len
-        forces[self.lj_cal[1],:] -= fij*rij/rij_len
-        '''
-        ## bond term (origin)##
-        for i in range(0,self.bond_table.shape[0]):
-            pair = self.bond_table[i]
-            fbond = -2*self.bond_energy*((np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))-self.bond_init)
-            forces[pair[1]-1,:] += ((self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])/np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))*fbond
-            forces[pair[2]-1,:] -= ((self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])/np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))*fbond
-        '''
-        ## bond term (matrix)##
-        bond_rij = self.system[self.bond_table[1],0:3] - self.system[self.bond_table[2],0:3]
-        bond_rij = bond_rij - np.round(np.dot(rij,self.a)/self.a_len**2)*self.a - \
-        - np.round(np.dot(rij,self.b)/self.b_len**2)*self.b \
-        - np.round(np.dot(rij,self.c)/self.c_len**2)*self.c
-        bond_rij_len = np.linalg.norm(bond_rij,axis=1)
-        fbond = -2*self.bond_energy*(bond_rij_len-self.bond_init)
-        # modify
-        forces[self.bond_table[1]-1,:] += ((self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])/np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))*fbond
-        forces[self.bond_table[2]-1,:] -= ((self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])/np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))*fbond
-
-
-
-        ## angle term ##
-
-        for i in range(0,self.angle_table.shape[0]):
-            pair = self.angle_table[i]
-            
-            # 1st bond length
-            delx1 = (self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])[0]
-            dely1 = (self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])[1]
-            delz1 = (self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])[2]
-            r1 = np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])
-
-            # 2rd bond length
-            delx2 = (self.system[pair[3]-1][0:3]-self.system[pair[2]-1][0:3])[0]
-            dely2 = (self.system[pair[3]-1][0:3]-self.system[pair[2]-1][0:3])[1]
-            delz2 = (self.system[pair[3]-1][0:3]-self.system[pair[2]-1][0:3])[2]
-            r2 = np.linalg.norm(self.system[pair[3]-1][0:3]-self.system[pair[2]-1][0:3])
-            
-            # angle
-
-            c = delx1*delx2 + dely1*dely2 + delz1*delz2
-            c /= r1*r2
-
-            if (c> 1.0):
-                c = 1.0
-            elif (c< -1.0):
-                c = -1.0
-            s = pow(1.0-c*c,0.5)
-            if (s< 0.001):
-                s = 0.001
-            s = 1.0/s
-
-            dtheta = math.acos(c)-math.radians(self.angle_init)
-            tk = self.angle_energy * dtheta
-            a = -2.0 * tk * s
-            a11 = a*c / r1**2
-            a12 = -a / (r1*r2)
-            a22 = a*c / r2**2
-
-            f1x = a11*delx1 + a12*delx2
-            f1y = a11*dely1 + a12*dely2
-            f1z = a11*delz1 + a12*delz2
-            f3x = a22*delx2 + a12*delx1
-            f3y = a22*dely2 + a12*dely1
-            f3z = a22*delz2 + a12*delz1
-
-            forces[pair[1]-1,0] += f1x 
-            forces[pair[1]-1,1] += f1y
-            forces[pair[1]-1,2] += f1z
-
-            forces[pair[2]-1,0] -= f1x + f3x 
-            forces[pair[2]-1,1] -= f1y + f3y
-            forces[pair[2]-1,2] -= f1z + f3z
-
-            forces[pair[3]-1,0] += f3x 
-            forces[pair[3]-1,1] += f3y
-            forces[pair[3]-1,2] += f3z
-
-        return forces
-
-    # calcaule non-bond energy #
     def CalculateEnergy(self):
-        energy = 0
-        for i in range(self.lj_cal[0].shape[0]):
-            rij = self.system[self.lj_cal[0][i],0:3] - self.system[self.lj_cal[1][i],0:3]
-            rij = rij - round(np.dot(rij,self.a)/self.a_len**2)*self.a - round(np.dot(rij,self.b)/self.b_len**2)*self.b - round(np.dot(rij,self.c)/self.c_len**2)*self.c
-                
-            sr6 = pow(self.sigma**2/np.dot(rij,rij),3)
-            sr12 = sr6**2
-            rij_len = np.power(np.dot(rij,rij),2)
-            if rij_len < cutoff:
-                energy += 4*self.epsilon*(sr12-sr6)
-                #print(energy)
-        return energy
+        """Non-bonded van der Waals energy in kcal/mol."""
+        state = self.context.getState(getEnergy=True, groups={2})
+        return float(state.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole))
 
-    # calcaule bond-term energy #
     def CalculateBondEnergy(self):
-        bond_energy = 0
-        for i in range(0,self.bond_table.shape[0]):
-            pair = self.bond_table[i]
-            bond_energy += self.bond_energy*((np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3]))-self.bond_init)**2
-            self.bond_dis.append((np.linalg.norm(self.system[pair[1]-1]-self.system[pair[2]-1])))
-        return bond_energy
- 
-    # calcaule angle-term energy #
+        """Bond energy in kcal/mol."""
+        state = self.context.getState(getEnergy=True, groups={0})
+        return float(state.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole))
+
     def CalculateAngleEnergy(self):
-        angle_energy = 0
-        for i in range(0,self.angle_table.shape[0]):
-            pair = self.angle_table[i]
-            
-            # 1st bond length
-            delx1 = (self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])[0]
-            dely1 = (self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])[1]
-            delz1 = (self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])[2]
-            r1 = np.linalg.norm(self.system[pair[1]-1][0:3]-self.system[pair[2]-1][0:3])
+        """Angle energy in kcal/mol."""
+        state = self.context.getState(getEnergy=True, groups={1})
+        return float(state.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole))
 
-            # 2rd bond length
-            delx2 = (self.system[pair[3]-1][0:3]-self.system[pair[2]-1][0:3])[0]
-            dely2 = (self.system[pair[3]-1][0:3]-self.system[pair[2]-1][0:3])[1]
-            delz2 = (self.system[pair[3]-1][0:3]-self.system[pair[2]-1][0:3])[2]
-            r2 = np.linalg.norm(self.system[pair[3]-1][0:3]-self.system[pair[2]-1][0:3])
-            
-            # angle
+    def CalPress(self):
+        """Virial pressure calculation in atm."""
+        state = self.context.getState(getPositions=True, getForces=True, getEnergy=True)
+        pos_nm = state.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+        forces_kJ = state.getForces(asNumpy=True).value_in_unit(unit.kilojoules_per_mole / unit.nanometer)
+        ke_kJ_mol = state.getKineticEnergy().value_in_unit(unit.kilojoules_per_mole)
+        vol_nm3 = state.getPeriodicBoxVolume().value_in_unit(unit.nanometer**3)
 
-            c = delx1*delx2 + dely1*dely2 + delz1*delz2
-            c /= r1*r2
+        virial = np.sum(pos_nm * forces_kJ)
+        # 1 (kJ/mol)/nm^3 = 16.60539067 bar = 16.38824641 atm
+        p_bar = ((2.0 * ke_kJ_mol + virial) / (3.0 * vol_nm3)) * 16.60539067
+        p_atm = p_bar / 1.01325
+        return float(p_atm)
 
-            if (c> 1.0):
-                c = 1.0
-            elif (c< -1.0):
-                c = -1.0
-            s = pow(1.0-c*c,0.5)
-            if (s< 0.001):
-                s = 0.001
-            s = 1.0/s
-            
-            dtheta = math.acos(c)-math.radians(self.angle_init)
-            angle_energy += self.angle_energy * dtheta * dtheta
-            self.angle_dis.append(math.degrees(math.acos(c)))
-        return angle_energy
-
-    # calculate pressure # 
-    def CalPress(self):     
-        pxx = ((np.sum(np.power(self.system[:,3:6],2)[:,0]*self.mass)*0.239005736*10000+(np.sum(np.dot(self.system[:,0],self.CalculateForces()[:,0])))))/self.volume*68568.415
-        pyy = ((np.sum(np.power(self.system[:,3:6],2)[:,1]*self.mass)*0.239005736*10000+(np.sum(np.dot(self.system[:,1],self.CalculateForces()[:,1])))))/self.volume*68568.415
-        pzz = ((np.sum(np.power(self.system[:,3:6],2)[:,2]*self.mass)*0.239005736*10000+(np.sum(np.dot(self.system[:,2],self.CalculateForces()[:,2])))))/self.volume*68568.415
-
-        press = (pxx+pyy+pzz)/3
-        
-        return press
-
-    # running process #
-    def run(self):
-        print("Status: Running (MD)")
+    def run(self, nsteps=100, print_interval=None):
+        if print_interval is None:
+            print_interval = max(1, nsteps // 5)
+        print("Status: Running (OpenMM on %s, Device: %s)" % (self.platform.getName(), str(self.gpu_id)))
         print('%10s\t%10s\t%10s\t%10s\t%10s\t%10s\t%10s' % ('Timestep','KE','Temp','Press','evdw','ebond','eangle'))
-        for i in range(nrun+1):  
-            self.non_bonded_neighbor_list()
-            print('%10d\t%10f\t%10f\t%10f\t%10f\t%10f\t%10f' % (i,self.KineticEnergy(),self.GetTemp(),self.CalPress(),self.CalculateEnergy(),self.CalculateBondEnergy(),self.CalculateAngleEnergy()))
-            force = self.CalculateForces()/ 48.88821291 /48.88821291
-            self.IncrementalPos(dt*self.system[:,3:6]+(0.5*(dt*dt)*force)/self.mass)
-            self.non_bonded_neighbor_list()
-            force_next = self.CalculateForces()/ 48.88821291 /48.88821291
-            self.IncrementalVel((0.5*dt*force+0.5*dt*force_next)/self.mass)
-  
+
+        current_step = 0
+        while current_step < nsteps:
+            steps_to_take = min(print_interval, nsteps - current_step)
+            self.integrator.step(steps_to_take)
+            current_step += steps_to_take
+            self._update_system_state()
+            print('%10d\t%10f\t%10f\t%10f\t%10f\t%10f\t%10f' % (
+                current_step,
+                self.KineticEnergy(),
+                self.GetTemp(),
+                self.CalPress(),
+                self.CalculateEnergy(),
+                self.CalculateBondEnergy(),
+                self.CalculateAngleEnergy()
+            ))

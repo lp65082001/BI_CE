@@ -1,0 +1,27 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# History files
+.bash_history
+.python_history
+
+# Editor and OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Generated output coordinates and dumps
+dump_parameter.txt
+dump_search.txt
+*.xyz
+*.data
+*.log
+
+# Virtual environments
+venv/
+.venv/
+env/

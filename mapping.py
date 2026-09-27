@@ -10,17 +10,19 @@ import warnings
 
 class FA2CG:
     
-    def __init__(self,structure,trajectory):
-        data = mda.Universe(structure,trajectory)
+    def __init__(self, structure, trajectory, output_prefix="./CG"):
+        data = mda.Universe(structure, trajectory)
         self.info = data
-        self.bead_mass = data.select_atoms('all').total_mass()/len(set(data.select_atoms('all').segids))/len(set(data.select_atoms('all').resids))
+        self.bead_mass = data.select_atoms('all').total_mass() / len(set(data.select_atoms('all').segids)) / len(set(data.select_atoms('all').resids))
         self.res = len(set(data.select_atoms('all').resids))
         self.sig = len(set(data.select_atoms('all').segids))
         self.frame = data.trajectory.n_frames
         self.box = data.dimensions
         self.bins_num = 101
         self.max_edge = 10 
-        self.path = "./CG"
+        self.path = output_prefix
+        self.torsionk = [0.0]
+        self.torsioni = 0.0
         print("Status: Initialized successfully")       
 
     # get all position information #
@@ -75,15 +77,13 @@ class FA2CG:
     def angle_list(self,x):
         y = []
         for i in range(0,x.shape[0]-2):
-            point_1 = x[i+0]
-            point_2 = x[i+1]
-            point_3 = x[i+2]
-            a=math.sqrt((point_2[0]-point_3[0])*(point_2[0]-point_3[0])+(point_2[1]-point_3[1])*(point_2[1] - point_3[1]))
-            b=math.sqrt((point_1[0]-point_3[0])*(point_1[0]-point_3[0])+(point_1[1]-point_3[1])*(point_1[1] - point_3[1]))
-            c=math.sqrt((point_1[0]-point_2[0])*(point_1[0]-point_2[0])+(point_1[1]-point_2[1])*(point_1[1]-point_2[1]))
-
-            y.append(math.degrees(math.acos((b*b-a*a-c*c)/(-2*a*c))))
-
+            v1 = x[i] - x[i+1]
+            v2 = x[i+2] - x[i+1]
+            norm1 = np.linalg.norm(v1)
+            norm2 = np.linalg.norm(v2)
+            if norm1 > 1e-6 and norm2 > 1e-6:
+                cos_val = float(np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0))
+                y.append(math.degrees(math.acos(cos_val)))
         return y  
 
     # calculate gaussian #
@@ -93,8 +93,8 @@ class FA2CG:
     # Parallelization #    
     def multi_process(self,task):
         num_process = 4
-        pool = mp.Pool(processes=num_process)
-        result_list = pool.map(task,[0,1,2,3])
+        with mp.Pool(processes=num_process) as pool:
+            result_list = pool.map(task,[0,1,2,3])
         return result_list
 
     # split by time #
@@ -146,8 +146,8 @@ class FA2CG:
         angle_all = []
         for k in range(0,self.frame):
             for j in range(0,self.sig):
-                bond_all.append(self.bond_list(self.list_position[k][j*60:(j+1)*60,:])) 
-                angle_all.append(self.angle_list(self.list_position[k][j*60:(j+1)*60,:])) 
+                bond_all.append(self.bond_list(self.list_position[k][j*self.res:(j+1)*self.res,:])) 
+                angle_all.append(self.angle_list(self.list_position[k][j*self.res:(j+1)*self.res,:])) 
         b_a = np.array(bond_all).reshape((-1,1))
         a_a = np.array(angle_all).reshape((-1,1))
         b_d = self.gaussian(b_a,np.mean(b_a),np.std(b_a))
